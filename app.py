@@ -1,95 +1,117 @@
-import pygame, sys
-from pygame.locals import *
+import pygame
 import numpy as np
-from keras.models import load_model
 import cv2
+import joblib
 
-WINDOWSIZEX = 1280
-WINDOWSIZEY = 720
+model = joblib.load("knn_model.pkl")
 
-BOUNDRYINC = 5
-WHITE = (255,255,255)
-BLACK = (0,0,0)
-RED = (255,0,0)
-
-IMAGESAVE = False
-
-MODEL = load_model("bestmodel.h5")
-
-LABELS = {0:"Zero", 1:"One", 2:"Two", 3:"Three", 4:"Four", 5:"Five", 6:"Six", 7:"Seven", 8:"Eight", 9:"Nine"}
-
-#Initialize our pygame
 pygame.init()
 
-FONT = pygame.font.SysFont("Arial", 24)
+FONT = pygame.font.SysFont("Arial", 60)
 
-#FONT = pygame.font.Font("freesansbold.tff" , 18)
-DISPLAYSURF = pygame.display.set_mode((WINDOWSIZEX, WINDOWSIZEY))
+WIDTH = 640
+HEIGHT = 480
 
-pygame.display.set_caption("Digit Board")
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("KNN Digit Recognition")
 
-iswriting = False
+screen.fill((0,0,0))
 
-number_xcord = []
-number_ycord = []
+drawing = False
+last_pos = None
 
-imag_cnt = 1
+# Digit labels
+LABELS = {
+0:"Zero",1:"One",2:"Two",3:"Three",4:"Four",
+5:"Five",6:"Six",7:"Seven",8:"Eight",9:"Nine"
+}
 
-PREDICT = True
+def draw(screen, start, end, width=18):
+    pygame.draw.line(screen, (255,255,255), start, end, width)
 
-img_arr = None
 
-while True:
+def get_image():
 
-  for event in pygame.event.get():
-    if event.type == QUIT:
-      pygame.quit()
-      sys.exit()
+    data = pygame.surfarray.array3d(screen)
 
-    if event.type == MOUSEMOTION and iswriting:
-      xcord, ycord = event.pos
-      pygame.draw.circle(DISPLAYSURF, WHITE, (xcord, ycord), 4, 0)
+    data = np.rot90(data)
+    data = np.flipud(data)
 
-      number_xcord.append(xcord)
-      number_ycord.append(ycord)
+    data = cv2.cvtColor(data, cv2.COLOR_BGR2GRAY)
 
-    if event.type == MOUSEBUTTONDOWN:
-      iswriting = True
+    data = 255 - data
 
-    if event.type == MOUSEBUTTONUP:
-      iswriting = False
-      
-      number_xcord = sorted(number_xcord)
-      number_ycord = sorted(number_ycord)
+    _, thresh = cv2.threshold(data, 50, 255, cv2.THRESH_BINARY)
 
-      rect_min_x , rect_max_x = max(number_xcord[0]-BOUNDRYINC, 0 ), min(WINDOWSIZEX, number_xcord[-1]+BOUNDRYINC)
-      rect_min_y , rect_max_y = max(number_ycord[0]-BOUNDRYINC, 0 ), min(WINDOWSIZEX, number_ycord[-1]+BOUNDRYINC)
+    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-      number_xcord = []
-      number_ycord = []
+    if len(contours) == 0:
+        return None
 
-      img_arr = np.array(pygame.PixelArray(DISPLAYSURF))[rect_min_x:rect_max_x, rect_min_y:rect_max_y].T.astype(np.float32)
+    c = max(contours, key=cv2.contourArea)
 
-    if IMAGESAVE:
-      cv2.imwrite("image.png")
-      imag_cnt +=1
+    x, y, w, h = cv2.boundingRect(c)
 
-    if PREDICT and img_arr is not None:
-      image = cv2.resize(img_arr, (28,28))
-      image = np.pad(image, (10,10), 'constant', constant_values=0 )
-      image = cv2.resize(image,(28,28))/255
+    digit = thresh[y:y+h, x:x+w]
 
-      label = str(LABELS[np.argmax(MODEL.predict(image.reshape(1,28,28,1)))])
+    digit = cv2.resize(digit, (28,28))
 
-      textSurface = FONT.render(label, True, RED, WHITE)
-      textRecObj = textSurface.get_rect()
-      textRecObj.centerx = (rect_min_x + rect_max_x) // 2
-      textRecObj.top = rect_max_y + 5
+    digit = digit.reshape(1,784)
 
-      DISPLAYSURF.blit(textSurface, textRecObj)
+    return digit
 
-    if event.type == KEYDOWN:
-      if event.unicode == "n":
-        DISPLAYSURF.fill(BLACK)
 
-  pygame.display.update()
+def predict_digit():
+
+    img = get_image()
+
+    if img is None:
+        return
+
+    prediction = model.predict(img)[0]
+
+    word = LABELS[prediction]
+
+    x, y = pygame.mouse.get_pos()
+
+    predictions.append((word, x, y))
+
+
+running = True
+predictions = []
+
+while running:
+
+    for event in pygame.event.get():
+
+        if event.type == pygame.QUIT:
+            running = False
+
+        elif event.type == pygame.MOUSEBUTTONDOWN:
+            drawing = True
+            last_pos = pygame.mouse.get_pos()
+
+        elif event.type == pygame.MOUSEBUTTONUP:
+            drawing = False
+            predict_digit()
+
+        elif event.type == pygame.MOUSEMOTION and drawing:
+            mouse_pos = pygame.mouse.get_pos()
+            draw(screen, last_pos, mouse_pos)
+            last_pos = mouse_pos
+
+        elif event.type == pygame.KEYDOWN:
+
+            # press C to clear
+            if event.key == pygame.K_c:
+                screen.fill((0,0,0))
+                predictions.clear()
+
+    # display predictions
+    for word, x, y in predictions:
+        text_surface = FONT.render(word, True, (255,0,0))
+        screen.blit(text_surface, (x, y))
+
+    pygame.display.update()
+
+pygame.quit()
